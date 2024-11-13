@@ -1,5 +1,4 @@
 #import "BlurView.h"
-#import "BlurEffectWithAmount.h"
 
 #ifdef RCT_NEW_ARCH_ENABLED
 #import <React/RCTConversions.h>
@@ -16,9 +15,13 @@ using namespace facebook::react;
 #else
 @interface BlurView ()
 #endif // RCT_NEW_ARCH_ENABLED
+
+@property (nonatomic, strong) UIViewPropertyAnimator *animator;
+
 @end
 
 @implementation BlurView
+
 
 - (instancetype)init
 {
@@ -43,19 +46,20 @@ using namespace facebook::react;
     self.blurEffectView = [[UIVisualEffectView alloc] init];
     self.blurEffectView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.blurEffectView.frame = frame;
-
+    self.blurEffectView.translatesAutoresizingMaskIntoConstraints = YES;
     self.reducedTransparencyFallbackView = [[UIView alloc] init];
     self.reducedTransparencyFallbackView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.reducedTransparencyFallbackView.frame = frame;
 
     self.blurAmount = @10;
     self.blurType = @"dark";
-    [self updateBlurEffect];
     [self updateFallbackView];
-
+  
     self.clipsToBounds = true;
-
+  
     [self addSubview:self.blurEffectView];
+    
+
   }
 
   return self;
@@ -93,9 +97,23 @@ using namespace facebook::react;
 }
 #endif // RCT_NEW_ARCH_ENABLED
 
+
+- (void)invalidateAnimator {
+  if (self.animator.state == UIViewAnimatingStateActive ||
+      self.animator.state == UIViewAnimatingStateInactive) {
+      [self.animator stopAnimation:YES];
+  }
+  
+  if (self.animator.state == UIViewAnimatingStateStopped) {
+    [self.animator finishAnimationAtPosition:UIViewAnimatingPositionCurrent];
+    self.animator = nil;
+  }
+}
+
 - (void)dealloc
 {
   [[NSNotificationCenter defaultCenter] removeObserver:self];
+  [self invalidateAnimator];
 }
 
 - (void)layoutSubviews
@@ -103,6 +121,19 @@ using namespace facebook::react;
   [super layoutSubviews];
   self.blurEffectView.frame = self.bounds;
   self.reducedTransparencyFallbackView.frame = self.bounds;
+}
+
+- (void)didMoveToSuperview {
+    [super didMoveToSuperview];
+    if (self.superview) {
+        [self updateFractionAnimation];
+    }
+}
+
+- (void)updateFractionAnimation {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        self.animator.fractionComplete = self.blurAmount.floatValue;
+      });
 }
 
 - (void)setBlurType:(NSString *)blurType
@@ -113,11 +144,39 @@ using namespace facebook::react;
   }
 }
 
+- (NSNumber *)valueToUpdate:(NSNumber *)blurAmount {
+    if (blurAmount) {
+        CGFloat newValue = blurAmount.floatValue / 100;
+        CGFloat currentValue = self.blurAmount.floatValue;
+    
+        if (newValue < 0.01) {
+            newValue = 0.01;
+        } else if (newValue > 0.99) {
+            newValue = 0.99;
+        }
+
+        CGFloat roundedValue = ceil(newValue / 0.05) * 0.05;
+
+        // If the current value matches the rounded value, no update is needed
+        if (fabs(currentValue - roundedValue) < 0.001) {
+            return nil;
+        }
+
+    
+        return @(roundedValue);
+    }
+
+    return nil;
+}
+
+
 - (void)setBlurAmount:(NSNumber *)blurAmount
 {
-  if (blurAmount && ![self.blurAmount isEqualToNumber:blurAmount]) {
-    _blurAmount = blurAmount;
-    [self updateBlurEffect];
+  NSNumber *newBlurAmount = [self valueToUpdate:blurAmount];
+  
+  if (newBlurAmount != nil) {
+    _blurAmount = newBlurAmount;
+    [self updateFractionAnimation];
   }
 }
 
@@ -180,9 +239,24 @@ using namespace facebook::react;
   // Without resetting the effect, changing blurAmount doesn't seem to work in Fabric...
   // Setting it to nil should also enable blur animations (see PR #392)
   self.blurEffectView.effect = nil;
+  
   UIBlurEffectStyle style = [self blurEffectStyle];
-  self.blurEffect = [BlurEffectWithAmount effectWithStyle:style andBlurAmount:self.blurAmount];
-  self.blurEffectView.effect = self.blurEffect;
+  self.blurEffect = [UIBlurEffect effectWithStyle:style];
+  [self invalidateAnimator];
+  
+  __weak typeof(self) weakSelf = self;
+  self.animator = [[UIViewPropertyAnimator alloc]
+                   initWithDuration:1.0
+                   curve:UIViewAnimationCurveLinear animations:^{
+    weakSelf.blurEffectView.effect = weakSelf.blurEffect;
+           }];
+  
+  // https://stackoverflow.com/a/42608071
+  // Looks like apple bug where fraction does not work if not set pause
+  [self.animator startAnimation];
+  [self.animator pauseAnimation];
+  
+  [self updateFractionAnimation];
 }
 
 - (void)updateFallbackView
