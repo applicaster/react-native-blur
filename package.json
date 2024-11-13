@@ -1,5 +1,5 @@
 {
-  "name": "@react-native-community/blur",
+  "name": "@applicaster/blur",
   "version": "4.4.1",
   "description": "React Native Blur component",
   "main": "lib/commonjs/index",
